@@ -43,10 +43,13 @@ return [
         'endpoints' => [
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
+            'https://overpass.private.coffee/api/interpreter',
         ],
+        // Busy public servers often answer 429/502/504; retry each one this many times.
+        'tries_per_endpoint' => 2,
         'timeout' => 180,
-        // Max OSM results fetched per query, before de-duplication.
-        'fetch_limit' => 300,
+        // Max OSM results fetched per query, before phone/e-mail filtering and de-duplication.
+        'fetch_limit' => 1000,
         'user_agent' => 'LinkDirectoryPro/1.0 (+https://linkdirectory.pro; support@linkdirectory.pro)',
     ],
 

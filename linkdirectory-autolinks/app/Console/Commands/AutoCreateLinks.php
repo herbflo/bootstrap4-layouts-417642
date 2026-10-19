@@ -146,37 +146,37 @@ class AutoCreateLinks extends Command
             ? sprintf('area["ISO3166-1"="%s"][admin_level=2]->.c;', $code)
             : sprintf('area["name:en"="%s"][admin_level=2]->.c;', addcslashes($countryTitle, '"\\'));
 
-        $must = '[name][~"^(website|contact:website)$"~"."]';
-        if ($cfg['require_phone']) {
-            $must .= '[~"^(phone|contact:phone)$"~"."]';
-        }
-        if ($cfg['require_email']) {
-            $must .= '[~"^(email|contact:email)$"~"."]';
-        }
-
+        // Plain tag filters only: regex key filters ([~"^(phone|...)$"~"."]) over a
+        // whole country overload the public servers. Phone and e-mail are
+        // checked in PHP instead (linkData).
         $union = '';
         foreach ($filters as $filter) {
-            $union .= "nwr{$filter}{$must}(area.c);\n";
+            $union .= "nwr{$filter}[name][\"website\"](area.c);\n";
+            $union .= "nwr{$filter}[name][\"contact:website\"](area.c);\n";
         }
 
         $o = $cfg['overpass'];
         $query = "[out:json][timeout:{$o['timeout']}];\n{$area}\n(\n{$union});\nout tags {$o['fetch_limit']};";
 
         foreach ($o['endpoints'] as $endpoint) {
-            try {
-                $res = Http::withHeaders(['User-Agent' => $o['user_agent']])
-                    ->timeout($o['timeout'] + 20)
-                    ->asForm()
-                    ->post($endpoint, ['data' => $query]);
+            for ($try = 1; $try <= $o['tries_per_endpoint']; $try++) {
+                try {
+                    $res = Http::withHeaders(['User-Agent' => $o['user_agent']])
+                        ->timeout($o['timeout'] + 20)
+                        ->asForm()
+                        ->post($endpoint, ['data' => $query]);
 
-                if ($res->successful()) {
-                    return $res->json('elements') ?? [];
+                    if ($res->successful()) {
+                        return $res->json('elements') ?? [];
+                    }
+                    $this->warn("Overpass {$endpoint} returned HTTP {$res->status()} (try {$try}): "
+                        . Str::limit(trim(strip_tags($res->body())), 150));
+                } catch (\Throwable $e) {
+                    $this->warn("Overpass {$endpoint} failed (try {$try}): {$e->getMessage()}");
                 }
-                $this->warn("Overpass {$endpoint} returned HTTP {$res->status()}");
-            } catch (\Throwable $e) {
-                $this->warn("Overpass {$endpoint} failed: {$e->getMessage()}");
+                // Busy server: wait longer before each retry (15s, 30s, ...).
+                sleep(15 * $try);
             }
-            sleep(5);
         }
 
         Log::warning("[links:auto-create] Overpass gave no data for {$countryTitle}");
