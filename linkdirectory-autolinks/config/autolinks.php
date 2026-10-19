@@ -40,17 +40,17 @@ return [
     'posted_by' => [
         // Admin user id. Null = the first admin found in the users table
         // (is_admin / role / type = admin), else the user with the lowest id.
-        'user_id' => null,
+        'user_id' => 1,
         // Links-table column for the author. Null = auto-detect
         // (user_id, created_by, author_id, posted_by, added_by).
-        'column' => null,
+        'column' => 'owner',
     ],
 
     // Links go live straight away (no approval queue).
     'publish' => [
         // Links-table column that marks a link as published/approved. Null =
         // auto-detect (status, is_published, published, is_approved, approved, is_active, active).
-        'column' => null,
+        'column' => 'enabled',
         // Value meaning "published" in that column (e.g. 1, 'published', 'approved').
         'value' => 1,
     ],
