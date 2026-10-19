@@ -56,7 +56,9 @@ return [
     ],
 
     // Extra fixed values for every auto-created link.
-    'extra_columns' => [],
+    'extra_columns' => [
+        'status' => 2,
+    ],
 
     // Where the site's countries come from. When the table does not exist,
     // the static list below is used instead (ISO 3166-1 alpha-2 => name).

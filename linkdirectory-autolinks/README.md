@@ -10,7 +10,7 @@ OpenStreetMap businesses that have a **name, website, phone and e-mail**:
   doesn't exist. If a country has fewer than 15 matches, it tops up from the
   next countries (`max_countries_per_run`).
 - **Posted by admin.** Every link is saved with `owner = 1` (the admin account).
-- **Published immediately.** Every link is saved with `enabled = 1`.
+- **Published immediately.** Every link is saved with `enabled = 1` and `status = 2`.
 - It skips links whose website domain is already in the directory.
 - Descriptions are generated from the OSM data and end with
   "© OpenStreetMap contributors". The ODbL licence requires that attribution.
