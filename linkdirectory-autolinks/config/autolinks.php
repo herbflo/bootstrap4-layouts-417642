@@ -21,9 +21,9 @@ return [
     // Admin user the links are posted by.
     'owner' => 1,
 
-    // If one country returns fewer than per_day results, top up from the
-    // next countries in the list (1 = today's country only).
-    'max_countries_per_run' => 3,
+    // 1 = all of the day's links come from that day's one country. Raise it
+    // to top up from the next countries when a country has too few matches.
+    'max_countries_per_run' => 1,
 
     // Stop trying further countries once a run has taken this many seconds,
     // so a slow OpenStreetMap server can't keep the cron job running for long.
