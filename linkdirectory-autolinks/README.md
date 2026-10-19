@@ -1,46 +1,45 @@
 # Daily auto-created links (linkdirectory.pro)
 
 Laravel artisan command `links:auto-create`. Every day it creates 15 links from
-OpenStreetMap businesses that have a **name, website, phone and e-mail**:
+OpenStreetMap businesses that have a **name, website, phone and e-mail**.
 
-- **One category per day.** It rotates through the category slugs mapped in
-  `config/autolinks.php` (about 60 subcategories such as `cafe`, `dentist`, `hotels`).
-- **One country per day.** It rotates through the countries in the site's
-  `countries` table, or through the fallback list in the config if that table
-  doesn't exist. If a country has fewer than 15 matches, it tops up from the
-  next countries (`max_countries_per_run`).
-- **Posted by admin.** Every link is saved with `owner = 1` (the admin account).
-- **Published immediately.** Every link is saved with `enabled = 1` and `status = 2`.
-- It skips links whose website domain is already in the directory.
+- **One category per day.** It rotates through the subcategories mapped in
+  `config/autolinks.php` (about 60, such as `cafe`, `dentist`, `hotels`). Each
+  link is filed under the subcategory and its parent category (`category_link`).
+- **One country per day.** It rotates through the countries in Admin → Locations
+  (top-level locations). Each link gets the country, plus the city when that
+  city exists under the country (`link_location`). If a country has fewer than
+  15 matches, it tops up from the next countries (`max_countries_per_run`).
+- **Saved like the bulk importer saves links:** `owner = 1`, `enabled = 1`,
+  `status = 2`, and the category's language. On top of that it fills
+  `phone_number` (E.164, checked the same way as the admin form), `email` and
+  `address`.
+- It skips businesses whose website domain is already in the directory, then
+  refreshes the category and location counts.
 - Descriptions are generated from the OSM data and end with
   "© OpenStreetMap contributors". The ODbL licence requires that attribution.
 
-## Install (paths on the Hostinger account)
+## Install
 
-Copy the files into the app folder `domains/linkdirectory.pro/lapp/`:
+Copy into the live app folder `domains/linkdirectory.pro/lapp/`:
 
 | From this folder | To |
 |---|---|
-| `app/Console/Commands/AutoCreateLinks.php` | `lapp/app/Console/Commands/` |
+| `app/Console/Commands/AutoCreateLinks.php` | `lapp/app/Console/Commands/` (create the `Commands` folder) |
 | `config/autolinks.php` | `lapp/config/` |
-| `database/migrations/2026_10_19_..._add_contact_columns_to_links_table.php` | `lapp/database/migrations/` |
 
-Then check `config/autolinks.php` against the real database:
-
-- `models`: use `\App\Link` / `\App\Category` if the app has no `app/Models` folder.
-- `link_columns`: the column names the links table uses for category, phone,
-  e-mail and address. The bulk-create insert shows the right names.
-- `extra_columns`: any required columns, such as `status`, `user_id` or `language`.
-
-Run once over SSH, starting with a dry run:
+No database changes are needed. Then, over SSH:
 
 ```bash
 cd ~/domains/linkdirectory.pro/lapp
 /opt/alt/php81/usr/bin/php artisan config:clear
-/opt/alt/php81/usr/bin/php artisan migrate            # only adds columns that are missing
 /opt/alt/php81/usr/bin/php artisan links:auto-create --dry-run
-/opt/alt/php81/usr/bin/php artisan links:auto-create --category=cafe --country=AU --limit=2
+/opt/alt/php81/usr/bin/php artisan links:auto-create --category=cafe --country=Australia --limit=2
 ```
+
+Country names are matched to OpenStreetMap by their English name. If a location
+title differs (e.g. "USA"), add it to `country_codes` in the config with its
+ISO code.
 
 ## Schedule (hPanel → Advanced → Cron Jobs)
 
@@ -51,3 +50,11 @@ Daily at 03:00:
 ```
 
 Results are logged to `lapp/storage/logs/laravel.log` (`[links:auto-create]`).
+
+## Bulk-create fix
+
+`bulk-fix/LinkController-bulk.php` holds a replacement for the loop in
+`LinkController::bulk()`. The current loop crashes the whole request when the
+textarea has a blank line (usually the trailing newline), a line with fewer
+than 3 `|` fields, or a category ID that doesn't exist. The file's header says
+exactly what to replace.
