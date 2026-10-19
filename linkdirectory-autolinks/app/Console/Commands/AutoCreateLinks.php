@@ -72,7 +72,13 @@ class AutoCreateLinks extends Command
         $attempts = min(max(1, (int) $cfg['max_countries_per_run']), $countries->count());
         $created = [];
 
+        $startedAt = time();
+
         for ($i = 0; $i < $attempts && count($created) < $limit; $i++) {
+            if ($i > 0 && time() - $startedAt > $cfg['max_runtime']) {
+                $this->warn('Time limit reached, not trying more countries today.');
+                break;
+            }
             $country = $countries[($start + $i) % $countries->count()];
             $this->info("Category: {$category->title} | Country: {$country->title}");
 

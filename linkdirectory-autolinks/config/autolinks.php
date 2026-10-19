@@ -25,6 +25,10 @@ return [
     // next countries in the list (1 = today's country only).
     'max_countries_per_run' => 3,
 
+    // Stop trying further countries once a run has taken this many seconds,
+    // so a slow OpenStreetMap server can't keep the cron job running for long.
+    'max_runtime' => 600,
+
     // Location titles that differ from the English country name in
     // OpenStreetMap, mapped to the ISO 3166-1 code (e.g. 'USA' => 'US').
     'country_codes' => [
@@ -46,8 +50,9 @@ return [
             'https://overpass.private.coffee/api/interpreter',
         ],
         // Busy public servers often answer 429/502/504; retry each one this many times.
-        'tries_per_endpoint' => 2,
-        'timeout' => 180,
+        'tries_per_endpoint' => 1,
+        // Seconds per request. A healthy server answers in well under a minute.
+        'timeout' => 60,
         // Max OSM results fetched per query, before phone/e-mail filtering and de-duplication.
         'fetch_limit' => 1000,
         'user_agent' => 'LinkDirectoryPro/1.0 (+https://linkdirectory.pro; support@linkdirectory.pro)',
