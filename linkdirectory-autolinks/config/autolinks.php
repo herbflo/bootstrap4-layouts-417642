@@ -6,9 +6,11 @@
 |--------------------------------------------------------------------------
 |
 | Used by `php artisan links:auto-create`. Every day the command picks the
-| next category from `categories` and the next country from the site's
-| countries, then creates `per_day` links from OpenStreetMap businesses
-| that have a name, website, phone number and e-mail address.
+| next category from `categories` and the next country (top-level location
+| in Admin > Locations), then creates `per_day` links from OpenStreetMap
+| businesses that have a name, website, phone number and e-mail address.
+| Links are saved like the bulk importer saves them: owner 1, enabled 1,
+| status 2, with the category's language.
 |
 */
 
@@ -16,62 +18,22 @@ return [
 
     'per_day' => 15,
 
-    // Model classes used by the site (change to App\Link / App\Category on older Laravel installs).
-    'models' => [
-        'link' => \App\Models\Link::class,
-        'category' => \App\Models\Category::class,
-    ],
-
-    // Column on the categories table that holds the slug used in /category/... URLs.
-    'category_slug_column' => 'slug',
-
-    // Columns on the links table. Set one to null to skip it. Columns that do
-    // not exist in the links table are dropped automatically before insert.
-    'link_columns' => [
-        'category' => 'category_id',
-        'phone' => 'phone_number',
-        'email' => 'email',
-        'address' => 'address',
-        // Auto-detected from country_id / location_id / country when null.
-        'country' => null,
-    ],
-
-    // Links are posted by the admin account.
-    'posted_by' => [
-        // Admin user id. Null = the first admin found in the users table
-        // (is_admin / role / type = admin), else the user with the lowest id.
-        'user_id' => 1,
-        // Links-table column for the author. Null = auto-detect
-        // (user_id, created_by, author_id, posted_by, added_by).
-        'column' => 'owner',
-    ],
-
-    // Links go live straight away (no approval queue).
-    'publish' => [
-        // Links-table column that marks a link as published/approved. Null =
-        // auto-detect (status, is_published, published, is_approved, approved, is_active, active).
-        'column' => 'enabled',
-        // Value meaning "published" in that column (e.g. 1, 'published', 'approved').
-        'value' => 1,
-    ],
-
-    // Extra fixed values for every auto-created link.
-    'extra_columns' => [
-        'status' => 2,
-    ],
-
-    // Where the site's countries come from. When the table does not exist,
-    // the static list below is used instead (ISO 3166-1 alpha-2 => name).
-    'countries' => [
-        'table' => 'countries',
-        'fallback' => [
-            'AU' => 'Australia',
-        ],
-    ],
+    // Admin user the links are posted by.
+    'owner' => 1,
 
     // If one country returns fewer than per_day results, top up from the
     // next countries in the list (1 = today's country only).
     'max_countries_per_run' => 3,
+
+    // Location titles that differ from the English country name in
+    // OpenStreetMap, mapped to the ISO 3166-1 code (e.g. 'USA' => 'US').
+    'country_codes' => [
+        'USA' => 'US',
+        'United States' => 'US',
+        'UK' => 'GB',
+        'United Kingdom' => 'GB',
+        'UAE' => 'AE',
+    ],
 
     // Only businesses that have every one of these are used.
     'require_phone' => true,

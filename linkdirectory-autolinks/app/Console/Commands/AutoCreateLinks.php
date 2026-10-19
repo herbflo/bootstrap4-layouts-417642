@@ -2,12 +2,17 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Category;
+use App\Models\Link;
+use App\Models\Location;
+use Brick\PhoneNumber\PhoneNumber;
+use Brick\PhoneNumber\PhoneNumberFormat;
+use Carbon\Carbon;
 use Cviebrock\EloquentSluggable\Services\SlugService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -16,188 +21,130 @@ use Illuminate\Support\Str;
  *
  *   php artisan links:auto-create                 run for today
  *   php artisan links:auto-create --dry-run       show what would be created
- *   php artisan links:auto-create --category=cafe --country=AU
+ *   php artisan links:auto-create --category=cafe --country=Australia --limit=2
  */
 class AutoCreateLinks extends Command
 {
     protected $signature = 'links:auto-create
                             {--dry-run : Show the links without saving them}
                             {--category= : Category slug to use instead of today\'s}
-                            {--country= : ISO country code to use instead of today\'s}
+                            {--country= : Country (location title) to use instead of today\'s}
                             {--limit= : Number of links to create (default: config per_day)}';
 
     protected $description = 'Create the daily batch of links from OpenStreetMap data';
-
-    private string $linkTable;
-    private array $linkColumns;
-    private ?int $adminId = null;
 
     public function handle(): int
     {
         $cfg = config('autolinks');
         $limit = (int) ($this->option('limit') ?: $cfg['per_day']);
         $dryRun = (bool) $this->option('dry-run');
+        $day = intdiv(Carbon::today()->timestamp, 86400);
 
-        $linkModel = $cfg['models']['link'];
-        $this->linkTable = (new $linkModel)->getTable();
-        $this->linkColumns = Schema::getColumnListing($this->linkTable);
-
-        $this->adminId = $this->adminId($cfg);
-        if ($this->adminId === null) {
-            $this->error('No admin user found. Set posted_by.user_id in config/autolinks.php.');
-            return self::FAILURE;
-        }
-        $this->info("Posting as admin user #{$this->adminId}");
-
-        $category = $this->pickCategory($cfg);
+        $category = $this->pickCategory($cfg, $day);
         if (!$category) {
-            $this->error('No category from config/autolinks.php exists in the database.');
             return self::FAILURE;
         }
 
-        $countries = $this->countries($cfg);
-        if (!$countries) {
-            $this->error('No countries found.');
+        // Countries are the top-level locations in the category's language.
+        $countries = Location::where('parent_id', 0)
+            ->where('language', $category->language)
+            ->orderBy('id')
+            ->get()
+            ->values();
+
+        if ($countries->isEmpty()) {
+            $this->error('No countries in Admin > Locations for this language.');
             return self::FAILURE;
         }
 
-        $day = intdiv(now()->startOfDay()->timestamp, 86400);
-        $start = $day % count($countries);
-        if ($code = strtoupper((string) $this->option('country'))) {
-            $start = array_search($code, array_column($countries, 'code'), true);
+        $start = $day % $countries->count();
+        if ($wanted = $this->option('country')) {
+            $start = $countries->search(fn ($c) => strcasecmp($c->title, $wanted) === 0);
             if ($start === false) {
-                $this->error("Country {$code} is not in the site's country list.");
+                $this->error("Country {$wanted} is not in Admin > Locations.");
                 return self::FAILURE;
             }
         }
 
-        $filters = $cfg['categories'][$category['slug']];
+        $parent = $category->parent_id ? Category::find($category->parent_id) : null;
+        $categoryIds = array_values(array_filter([$category->id, $parent->id ?? null]));
+        $filters = $cfg['categories'][$category->slug];
+        $attempts = min(max(1, (int) $cfg['max_countries_per_run']), $countries->count());
         $created = [];
-        $attempts = min(max(1, (int) $cfg['max_countries_per_run']), count($countries));
 
         for ($i = 0; $i < $attempts && count($created) < $limit; $i++) {
-            $country = $countries[($start + $i) % count($countries)];
-            $this->info("Category: {$category['slug']} | Country: {$country['name']}");
+            $country = $countries[($start + $i) % $countries->count()];
+            $this->info("Category: {$category->title} | Country: {$country->title}");
 
-            $places = $this->fetchPlaces($filters, $country, $cfg);
+            $places = $this->fetchPlaces($filters, $country->title, $cfg);
             shuffle($places);
 
             foreach ($places as $place) {
                 if (count($created) >= $limit) {
                     break;
                 }
-                $row = $this->buildRow($place, $category['model'], $country, $cfg);
-                if (!$row || $this->exists($row['url'])) {
+                $data = $this->linkData($place['tags'] ?? [], $category, $country, $cfg);
+                if (!$data || $this->exists($data['url'])) {
                     continue;
                 }
+
                 if (!$dryRun) {
-                    DB::table($this->linkTable)->insert($row);
+                    $this->save($data, $categoryIds, $country, $data['city']);
                 }
-                $created[] = $row;
+                $created[] = $data;
             }
         }
 
-        if ($created) {
-            $this->table(['title', 'url', 'phone', 'email'], array_map(fn ($r) => [
-                $r['title'], $r['url'], $r[$cfg['link_columns']['phone']] ?? '', $r[$cfg['link_columns']['email']] ?? '',
-            ], $created));
+        if ($created && !$dryRun) {
+            // Same as the bulk importer: refresh the link counts.
+            count_categories();
+            count_locations();
         }
 
-        $msg = sprintf('%s %d link(s) for category "%s".', $dryRun ? 'Would create' : 'Created', count($created), $category['slug']);
+        if ($created) {
+            $this->table(['title', 'url', 'phone', 'email'], array_map(
+                fn ($d) => [$d['title'], $d['url'], $d['phone_number'], $d['email']],
+                $created
+            ));
+        }
+
+        $msg = sprintf('%s %d link(s) for category "%s".', $dryRun ? 'Would create' : 'Created', count($created), $category->title);
         $this->info($msg);
         Log::info("[links:auto-create] {$msg}");
 
         return self::SUCCESS;
     }
 
-    /** Today's category: the next configured slug that exists in the database. */
-    private function pickCategory(array $cfg): ?array
+    /** Today's category: the next configured subcategory slug that exists in the database. */
+    private function pickCategory(array $cfg, int $day): ?Category
     {
-        $model = $cfg['models']['category'];
-        $slugCol = $cfg['category_slug_column'];
         $slugs = array_keys($cfg['categories']);
 
         if ($wanted = $this->option('category')) {
             if (!isset($cfg['categories'][$wanted])) {
-                $this->error("Category {$wanted} has no OSM mapping in config/autolinks.php.");
+                $this->error("Category {$wanted} has no OpenStreetMap mapping in config/autolinks.php.");
                 return null;
             }
             $slugs = [$wanted];
         }
 
-        $found = $model::whereIn($slugCol, $slugs)->get()->keyBy($slugCol);
+        $found = Category::whereIn('slug', $slugs)->get()->keyBy('slug');
         $available = array_values(array_filter($slugs, fn ($s) => $found->has($s)));
+
         if (!$available) {
+            $this->error('None of the categories in config/autolinks.php exist in Admin > Categories.');
             return null;
         }
 
-        $slug = $available[intdiv(now()->startOfDay()->timestamp, 86400) % count($available)];
-        return ['slug' => $slug, 'model' => $found[$slug]];
+        return $found[$available[$day % count($available)]];
     }
 
-    /** The admin account the links are posted by. */
-    private function adminId(array $cfg): ?int
+    private function fetchPlaces(array $filters, string $countryTitle, array $cfg): array
     {
-        if ($id = $cfg['posted_by']['user_id']) {
-            return (int) $id;
-        }
-        if (!Schema::hasTable('users')) {
-            return null;
-        }
-
-        $cols = Schema::getColumnListing('users');
-        $query = DB::table('users')->orderBy('id');
-
-        if (in_array('is_admin', $cols, true)) {
-            $id = (clone $query)->where('is_admin', 1)->value('id');
-        } else {
-            $roleCol = $this->firstColumn($cols, ['role', 'type', 'user_type', 'group']);
-            $id = $roleCol ? (clone $query)->whereIn($roleCol, ['admin', 'administrator'])->value('id') : null;
-        }
-
-        $id = $id ?? $query->value('id');
-        return $id !== null ? (int) $id : null;
-    }
-
-    /** The site's countries as [code, name, id], from the countries table or the fallback list. */
-    private function countries(array $cfg): array
-    {
-        $table = $cfg['countries']['table'];
-
-        if ($table && Schema::hasTable($table)) {
-            $cols = Schema::getColumnListing($table);
-            $codeCol = $this->firstColumn($cols, ['iso_code', 'iso2', 'iso', 'country_code', 'code', 'sortname']);
-            $nameCol = $this->firstColumn($cols, ['name', 'title', 'country', 'country_name']);
-
-            if ($nameCol) {
-                $rows = DB::table($table)->orderBy('id')->get();
-                $list = [];
-                foreach ($rows as $row) {
-                    $code = $codeCol ? strtoupper(trim((string) $row->$codeCol)) : '';
-                    $list[] = [
-                        'id' => $row->id ?? null,
-                        'code' => strlen($code) === 2 ? $code : '',
-                        'name' => (string) $row->$nameCol,
-                    ];
-                }
-                if ($list) {
-                    return $list;
-                }
-            }
-        }
-
-        $list = [];
-        foreach ($cfg['countries']['fallback'] as $code => $name) {
-            $list[] = ['id' => null, 'code' => strtoupper($code), 'name' => $name];
-        }
-        return $list;
-    }
-
-    private function fetchPlaces(array $filters, array $country, array $cfg): array
-    {
-        $area = $country['code'] !== ''
-            ? sprintf('area["ISO3166-1"="%s"][admin_level=2]->.c;', $country['code'])
-            : sprintf('area["name:en"="%s"][admin_level=2]->.c;', addcslashes($country['name'], '"\\'));
+        $code = $cfg['country_codes'][$countryTitle] ?? null;
+        $area = $code
+            ? sprintf('area["ISO3166-1"="%s"][admin_level=2]->.c;', $code)
+            : sprintf('area["name:en"="%s"][admin_level=2]->.c;', addcslashes($countryTitle, '"\\'));
 
         $must = '[name][~"^(website|contact:website)$"~"."]';
         if ($cfg['require_phone']) {
@@ -232,92 +179,98 @@ class AutoCreateLinks extends Command
             sleep(5);
         }
 
-        Log::warning("[links:auto-create] Overpass gave no data for {$country['name']}");
+        Log::warning("[links:auto-create] Overpass gave no data for {$countryTitle}");
         return [];
     }
 
-    private function buildRow(array $place, $category, array $country, array $cfg): ?array
+    /** Map OSM tags to the link fields, or null when a required field is missing. */
+    private function linkData(array $t, Category $category, Location $country, array $cfg): ?array
     {
-        $t = $place['tags'] ?? [];
         $title = trim($t['name'] ?? '');
         $url = $this->normalizeUrl($t['website'] ?? $t['contact:website'] ?? '');
-        $phone = $this->firstValue($t['phone'] ?? $t['contact:phone'] ?? '');
-        $email = strtolower($this->firstValue($t['email'] ?? $t['contact:email'] ?? ''));
-
         if ($title === '' || !$url) {
             return null;
         }
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $email = '';
+
+        $email = strtolower($this->firstValue($t['email'] ?? $t['contact:email'] ?? ''));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $email = null;
         }
-        if (($cfg['require_phone'] && $phone === '') || ($cfg['require_email'] && $email === '')) {
+
+        $phone = $this->phone($this->firstValue($t['phone'] ?? $t['contact:phone'] ?? ''), $t['addr:country'] ?? null);
+
+        if (($cfg['require_phone'] && !$phone) || ($cfg['require_email'] && !$email)) {
             return null;
         }
 
-        $address = $this->address($t);
-        $catName = $category->title ?? $category->name ?? Str::headline($category->{$cfg['category_slug_column']});
-        $description = $this->description($title, $catName, $t, $country['name']);
+        $city = $t['addr:city'] ?? $t['addr:town'] ?? $t['addr:suburb'] ?? null;
 
-        $cols = $cfg['link_columns'];
-        $row = [
-            'title' => Str::limit($title, 250, ''),
-            'description' => $description,
-            'slug' => SlugService::createSlug($cfg['models']['link'], 'slug', $title),
+        return [
+            'title' => Str::limit($title, 100, ''),
             'url' => $url,
-            'bypass_redirect' => 0,
-            'bypass_details' => 0,
-            'page_views' => 0,
-            'clicks' => 0,
-            'featured_category' => 0,
-            'featured_home' => 0,
-            'votes' => '0.00',
-            'created_at' => now(),
-            'updated_at' => now(),
+            'description' => Str::limit($this->description($title, $category->title, $t, $city, $country->title), 755, ''),
+            'phone_number' => $phone,
+            'email' => $email,
+            'address' => $this->address($t),
+            'city' => $city,
         ];
-
-        if ($cols['category']) {
-            $row[$cols['category']] = $category->id;
-        }
-        if ($cols['phone']) {
-            $row[$cols['phone']] = preg_replace('/[^\d+]/', '', $phone);
-        }
-        if ($cols['email']) {
-            $row[$cols['email']] = $email;
-        }
-        if ($cols['address'] && $address !== '') {
-            $row[$cols['address']] = $address;
-        }
-
-        $countryCol = $cols['country'] ?? $this->firstColumn($this->linkColumns, ['country_id', 'location_id', 'country']);
-        if ($countryCol) {
-            $row[$countryCol] = Str::endsWith($countryCol, '_id') ? $country['id'] : $country['name'];
-        }
-
-        $authorCol = $cfg['posted_by']['column']
-            ?? $this->firstColumn($this->linkColumns, ['user_id', 'created_by', 'author_id', 'posted_by', 'added_by']);
-        if ($authorCol && $this->adminId !== null) {
-            $row[$authorCol] = $this->adminId;
-        }
-
-        $publishCol = $cfg['publish']['column'] ?? $this->firstColumn($this->linkColumns,
-            ['status', 'is_published', 'published', 'is_approved', 'approved', 'is_active', 'active']);
-        if ($publishCol) {
-            $row[$publishCol] = $cfg['publish']['value'];
-        }
-        foreach (['published_at', 'approved_at'] as $dateCol) {
-            $row[$dateCol] = now();
-        }
-
-        $row = array_merge($row, $cfg['extra_columns']);
-
-        // Only keep columns the links table really has.
-        return array_intersect_key($row, array_flip($this->linkColumns)) + ['url' => $url, 'title' => $row['title']];
     }
 
-    private function description(string $title, string $catName, array $t, string $countryName): string
+    /** Insert the link the same way LinkController@bulk does, plus contacts and locations. */
+    private function save(array $data, array $categoryIds, Location $country, ?string $city): void
     {
-        $city = $t['addr:city'] ?? $t['addr:suburb'] ?? $t['addr:town'] ?? '';
-        $where = $city !== '' ? "{$city}, {$countryName}" : $countryName;
+        DB::transaction(function () use ($data, $categoryIds, $country, $city) {
+            $category = Category::find($categoryIds[0]);
+
+            $linkId = Link::insertGetId([
+                'title' => $data['title'],
+                'description' => $data['description'],
+                'slug' => SlugService::createSlug(Link::class, 'slug', $data['title']),
+                'url' => $data['url'],
+                'phone_number' => $data['phone_number'],
+                'email' => $data['email'],
+                'address' => $data['address'],
+                'bypass_redirect' => 0,
+                'bypass_details' => 0,
+                'page_views' => 0,
+                'clicks' => 0,
+                'featured_category' => 0,
+                'featured_home' => 0,
+                'votes' => '0.00',
+                'total_votes' => 0,
+                'badge' => 0,
+                'owner' => config('autolinks.owner'),
+                'package' => 0,
+                'gallery' => '',
+                'language' => $category->language,
+                'enabled' => 1,
+                'status' => 2,
+                'is_subscription' => 0,
+                'created_at' => Carbon::now(),
+                'updated_at' => Carbon::now(),
+            ]);
+
+            foreach ($categoryIds as $categoryId) {
+                DB::table('category_link')->insert(['link_id' => $linkId, 'category_id' => $categoryId]);
+            }
+
+            // Country, plus the city when it exists under that country in Admin > Locations.
+            $locationIds = [$country->id];
+            if ($city) {
+                $cityId = Location::where('parent_id', $country->id)->where('title', $city)->value('id');
+                if ($cityId) {
+                    $locationIds[] = $cityId;
+                }
+            }
+            foreach ($locationIds as $locationId) {
+                DB::table('link_location')->insert(['link_id' => $linkId, 'location_id' => $locationId]);
+            }
+        });
+    }
+
+    private function description(string $title, string $catName, array $t, ?string $city, string $countryName): string
+    {
+        $where = $city ? "{$city}, {$countryName}" : $countryName;
 
         $text = "{$title} – {$catName} in {$where}.";
         if (!empty($t['description'])) {
@@ -330,7 +283,7 @@ class AutoCreateLinks extends Command
         return $text . ' Business details © OpenStreetMap contributors.';
     }
 
-    private function address(array $t): string
+    private function address(array $t): ?string
     {
         $street = trim(($t['addr:housenumber'] ?? '') . ' ' . ($t['addr:street'] ?? ''));
         $parts = array_filter([
@@ -338,13 +291,27 @@ class AutoCreateLinks extends Command
             $t['addr:suburb'] ?? $t['addr:city'] ?? '',
             trim(($t['addr:state'] ?? '') . ' ' . ($t['addr:postcode'] ?? '')),
         ]);
-        return implode(', ', $parts);
+        return $parts ? implode(', ', $parts) : null;
+    }
+
+    /** E.164 phone number, validated the same way the admin link form does. */
+    private function phone(string $raw, ?string $region): ?string
+    {
+        if ($raw === '') {
+            return null;
+        }
+        try {
+            $number = PhoneNumber::parse($raw, $region ? strtoupper($region) : null);
+            return $number->format(PhoneNumberFormat::E164);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function exists(string $url): bool
     {
         $host = preg_replace('/^www\./', '', (string) parse_url($url, PHP_URL_HOST));
-        return DB::table($this->linkTable)
+        return DB::table('links')
             ->where('url', $url)
             ->orWhere('url', 'like', '%://' . $host . '%')
             ->orWhere('url', 'like', '%://www.' . $host . '%')
@@ -353,7 +320,7 @@ class AutoCreateLinks extends Command
 
     private function normalizeUrl(string $url): ?string
     {
-        $url = trim($this->firstValue($url));
+        $url = $this->firstValue($url);
         if ($url === '') {
             return null;
         }
@@ -367,15 +334,5 @@ class AutoCreateLinks extends Command
     private function firstValue(string $value): string
     {
         return trim(explode(';', $value)[0]);
-    }
-
-    private function firstColumn(array $columns, array $candidates): ?string
-    {
-        foreach ($candidates as $c) {
-            if (in_array($c, $columns, true)) {
-                return $c;
-            }
-        }
-        return null;
     }
 }
