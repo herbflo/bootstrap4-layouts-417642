@@ -30,6 +30,7 @@ class AutoCreateLinks extends Command
 
     private string $linkTable;
     private array $linkColumns;
+    private ?int $adminId = null;
 
     public function handle(): int
     {
@@ -40,6 +41,13 @@ class AutoCreateLinks extends Command
         $linkModel = $cfg['models']['link'];
         $this->linkTable = (new $linkModel)->getTable();
         $this->linkColumns = Schema::getColumnListing($this->linkTable);
+
+        $this->adminId = $this->adminId($cfg);
+        if ($this->adminId === null) {
+            $this->error('No admin user found. Set posted_by.user_id in config/autolinks.php.');
+            return self::FAILURE;
+        }
+        $this->info("Posting as admin user #{$this->adminId}");
 
         $category = $this->pickCategory($cfg);
         if (!$category) {
@@ -125,6 +133,30 @@ class AutoCreateLinks extends Command
 
         $slug = $available[intdiv(now()->startOfDay()->timestamp, 86400) % count($available)];
         return ['slug' => $slug, 'model' => $found[$slug]];
+    }
+
+    /** The admin account the links are posted by. */
+    private function adminId(array $cfg): ?int
+    {
+        if ($id = $cfg['posted_by']['user_id']) {
+            return (int) $id;
+        }
+        if (!Schema::hasTable('users')) {
+            return null;
+        }
+
+        $cols = Schema::getColumnListing('users');
+        $query = DB::table('users')->orderBy('id');
+
+        if (in_array('is_admin', $cols, true)) {
+            $id = (clone $query)->where('is_admin', 1)->value('id');
+        } else {
+            $roleCol = $this->firstColumn($cols, ['role', 'type', 'user_type', 'group']);
+            $id = $roleCol ? (clone $query)->whereIn($roleCol, ['admin', 'administrator'])->value('id') : null;
+        }
+
+        $id = $id ?? $query->value('id');
+        return $id !== null ? (int) $id : null;
     }
 
     /** The site's countries as [code, name, id], from the countries table or the fallback list. */
@@ -259,6 +291,12 @@ class AutoCreateLinks extends Command
         $countryCol = $cols['country'] ?? $this->firstColumn($this->linkColumns, ['country_id', 'location_id', 'country']);
         if ($countryCol) {
             $row[$countryCol] = Str::endsWith($countryCol, '_id') ? $country['id'] : $country['name'];
+        }
+
+        $authorCol = $cfg['posted_by']['column']
+            ?? $this->firstColumn($this->linkColumns, ['user_id', 'created_by', 'author_id', 'posted_by', 'added_by']);
+        if ($authorCol && $this->adminId !== null) {
+            $row[$authorCol] = $this->adminId;
         }
 
         $row = array_merge($row, $cfg['extra_columns']);

@@ -9,6 +9,9 @@ OpenStreetMap businesses that have a **name, website, phone and e-mail**:
   `countries` table, or through the fallback list in the config if that table
   doesn't exist. If a country has fewer than 15 matches, it tops up from the
   next countries (`max_countries_per_run`).
+- **Posted by admin.** Every link is saved under the admin account: the first
+  admin in the `users` table, or the user set in `posted_by.user_id`. The run
+  stops if no admin is found.
 - It skips links whose website domain is already in the directory.
 - Descriptions are generated from the OSM data and end with
   "© OpenStreetMap contributors". The ODbL licence requires that attribution.

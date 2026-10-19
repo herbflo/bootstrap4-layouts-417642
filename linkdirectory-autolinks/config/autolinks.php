@@ -36,7 +36,17 @@ return [
         'country' => null,
     ],
 
-    // Extra fixed values for every auto-created link (e.g. 'status' => 1, 'user_id' => 1).
+    // Links are posted by the admin account.
+    'posted_by' => [
+        // Admin user id. Null = the first admin found in the users table
+        // (is_admin / role / type = admin), else the user with the lowest id.
+        'user_id' => null,
+        // Links-table column for the author. Null = auto-detect
+        // (user_id, created_by, author_id, posted_by, added_by).
+        'column' => null,
+    ],
+
+    // Extra fixed values for every auto-created link (e.g. 'status' => 1).
     'extra_columns' => [],
 
     // Where the site's countries come from. When the table does not exist,
