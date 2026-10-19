@@ -8,10 +8,10 @@ OpenStreetMap businesses that have a **name, website, phone and e-mail**.
   link is filed under the subcategory and its parent category (`category_link`).
 - **One country per day.** It rotates through the countries in Admin → Locations
   (top-level locations). Each link gets the country, plus the city when that
-  city exists under the country (`link_location`). All of the day's links come
-  from that one category and one country; if they have fewer than 15 matches,
-  that day gets fewer links (set `max_countries_per_run` above 1 to top up
-  from the next countries instead).
+  city exists under the country (`link_location`). Each day starts with one category
+  and one country. If they have fewer than 15 matches, it moves on to the next
+  countries, then to the next categories, until 15 links are created (or the
+  20-minute `max_runtime` is reached).
 - **Saved like the bulk importer saves links:** `owner = 1`, `enabled = 1`,
   `status = 2`, and the category's language. On top of that it fills
   `phone_number` (E.164, checked the same way as the admin form), `email` and

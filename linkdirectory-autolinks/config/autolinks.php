@@ -21,13 +21,17 @@ return [
     // Admin user the links are posted by.
     'owner' => 1,
 
-    // 1 = all of the day's links come from that day's one country. Raise it
-    // to top up from the next countries when a country has too few matches.
-    'max_countries_per_run' => 1,
+    // The day starts with one category and one country. If they have fewer
+    // than per_day matches, it moves on to the next countries, then to the
+    // next categories, until per_day links are created.
+    // Countries to try per category (0 = all of them).
+    'max_countries_per_run' => 0,
+    // Categories to try per day.
+    'max_categories_per_run' => 3,
 
-    // Stop trying further countries once a run has taken this many seconds,
-    // so a slow OpenStreetMap server can't keep the cron job running for long.
-    'max_runtime' => 600,
+    // Stop once a run has taken this many seconds (each country takes about
+    // a minute), so a slow OpenStreetMap server can't keep the job running.
+    'max_runtime' => 1200,
 
     // Location titles that differ from the English country name in
     // OpenStreetMap, mapped to the ISO 3166-1 code (e.g. 'USA' => 'US').

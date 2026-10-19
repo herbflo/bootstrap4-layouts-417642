@@ -40,65 +40,77 @@ class AutoCreateLinks extends Command
         $dryRun = (bool) $this->option('dry-run');
         $day = intdiv(Carbon::today()->timestamp, 86400);
 
-        $category = $this->pickCategory($cfg, $day);
-        if (!$category) {
+        // Today's category first, then the following ones if more are needed.
+        $categories = $this->pickCategories($cfg, $day);
+        if (!$categories) {
             return self::FAILURE;
         }
 
-        // Countries are the top-level locations in the category's language.
-        $countries = Location::where('parent_id', 0)
-            ->where('language', $category->language)
-            ->orderBy('id')
-            ->get()
-            ->values();
-
-        if ($countries->isEmpty()) {
-            $this->error('No countries in Admin > Locations for this language.');
-            return self::FAILURE;
-        }
-
-        $start = $day % $countries->count();
-        if ($wanted = $this->option('country')) {
-            $start = $countries->search(fn ($c) => strcasecmp($c->title, $wanted) === 0);
-            if ($start === false) {
-                $this->error("Country {$wanted} is not in Admin > Locations.");
-                return self::FAILURE;
-            }
-        }
-
-        $parent = $category->parent_id ? Category::find($category->parent_id) : null;
-        $categoryIds = array_values(array_filter([$category->id, $parent->id ?? null]));
-        $filters = $cfg['categories'][$category->slug];
-        $attempts = min(max(1, (int) $cfg['max_countries_per_run']), $countries->count());
         $created = [];
-
         $startedAt = time();
+        $maxCountries = (int) $cfg['max_countries_per_run'];
 
-        for ($i = 0; $i < $attempts && count($created) < $limit; $i++) {
-            if ($i > 0 && time() - $startedAt > $cfg['max_runtime']) {
-                $this->warn('Time limit reached, not trying more countries today.');
+        foreach ($categories as $category) {
+            if (count($created) >= $limit || $this->outOfTime($startedAt, $cfg)) {
                 break;
             }
-            $country = $countries[($start + $i) % $countries->count()];
-            $this->info("Category: {$category->title} | Country: {$country->title}");
 
-            $places = $this->fetchPlaces($filters, $country->title, $cfg);
-            shuffle($places);
+            // Countries are the top-level locations in the category's language.
+            $countries = Location::where('parent_id', 0)
+                ->where('language', $category->language)
+                ->orderBy('id')
+                ->get()
+                ->values();
 
-            foreach ($places as $place) {
-                if (count($created) >= $limit) {
+            if ($countries->isEmpty()) {
+                $this->warn("No countries in Admin > Locations for the language of {$category->title}.");
+                continue;
+            }
+
+            $start = $day % $countries->count();
+            if ($wanted = $this->option('country')) {
+                $start = $countries->search(fn ($c) => strcasecmp($c->title, $wanted) === 0);
+                if ($start === false) {
+                    $this->error("Country {$wanted} is not in Admin > Locations.");
+                    return self::FAILURE;
+                }
+            }
+
+            $parent = $category->parent_id ? Category::find($category->parent_id) : null;
+            $categoryIds = array_values(array_filter([$category->id, $parent->id ?? null]));
+            $filters = $cfg['categories'][$category->slug];
+            $attempts = $maxCountries > 0 ? min($maxCountries, $countries->count()) : $countries->count();
+
+            // Today's country first, then the next countries until the day's links are filled.
+            for ($i = 0; $i < $attempts && count($created) < $limit; $i++) {
+                if ($this->outOfTime($startedAt, $cfg)) {
                     break;
                 }
-                $data = $this->linkData($place['tags'] ?? [], $category, $country, $cfg);
-                if (!$data || $this->exists($data['url'])) {
-                    continue;
-                }
+                $country = $countries[($start + $i) % $countries->count()];
+                $this->info("Category: {$category->title} | Country: {$country->title}");
 
-                if (!$dryRun) {
-                    $this->save($data, $categoryIds, $country, $data['city']);
+                $places = $this->fetchPlaces($filters, $country->title, $cfg);
+                shuffle($places);
+
+                foreach ($places as $place) {
+                    if (count($created) >= $limit) {
+                        break;
+                    }
+                    $data = $this->linkData($place['tags'] ?? [], $category, $country, $cfg);
+                    if (!$data || $this->exists($data['url'])) {
+                        continue;
+                    }
+
+                    if (!$dryRun) {
+                        $this->save($data, $categoryIds, $country, $data['city']);
+                    }
+                    $created[] = $data + ['category' => $category->title, 'country' => $country->title];
                 }
-                $created[] = $data;
             }
+        }
+
+        if (count($created) < $limit && $this->outOfTime($startedAt, $cfg)) {
+            $this->warn('Time limit reached, stopping for today.');
         }
 
         if ($created && !$dryRun) {
@@ -108,28 +120,36 @@ class AutoCreateLinks extends Command
         }
 
         if ($created) {
-            $this->table(['title', 'url', 'phone', 'email'], array_map(
-                fn ($d) => [$d['title'], $d['url'], $d['phone_number'], $d['email']],
+            $this->table(['title', 'category', 'country', 'url', 'phone', 'email'], array_map(
+                fn ($d) => [$d['title'], $d['category'], $d['country'], $d['url'], $d['phone_number'], $d['email']],
                 $created
             ));
         }
 
-        $msg = sprintf('%s %d link(s) for category "%s".', $dryRun ? 'Would create' : 'Created', count($created), $category->title);
+        $msg = sprintf('%s %d of %d link(s).', $dryRun ? 'Would create' : 'Created', count($created), $limit);
         $this->info($msg);
         Log::info("[links:auto-create] {$msg}");
 
         return self::SUCCESS;
     }
 
-    /** Today's category: the next configured subcategory slug that exists in the database. */
-    private function pickCategory(array $cfg, int $day): ?Category
+    private function outOfTime(int $startedAt, array $cfg): bool
+    {
+        return time() - $startedAt > $cfg['max_runtime'];
+    }
+
+    /**
+     * Configured subcategories that exist in the database, starting with
+     * today's, followed by the next ones (up to max_categories_per_run).
+     */
+    private function pickCategories(array $cfg, int $day): array
     {
         $slugs = array_keys($cfg['categories']);
 
         if ($wanted = $this->option('category')) {
             if (!isset($cfg['categories'][$wanted])) {
                 $this->error("Category {$wanted} has no OpenStreetMap mapping in config/autolinks.php.");
-                return null;
+                return [];
             }
             $slugs = [$wanted];
         }
@@ -139,10 +159,16 @@ class AutoCreateLinks extends Command
 
         if (!$available) {
             $this->error('None of the categories in config/autolinks.php exist in Admin > Categories.');
-            return null;
+            return [];
         }
 
-        return $found[$available[$day % count($available)]];
+        $start = $day % count($available);
+        $count = min(max(1, (int) $cfg['max_categories_per_run']), count($available));
+        $list = [];
+        for ($i = 0; $i < $count; $i++) {
+            $list[] = $found[$available[($start + $i) % count($available)]];
+        }
+        return $list;
     }
 
     private function fetchPlaces(array $filters, string $countryTitle, array $cfg): array
