@@ -46,7 +46,16 @@ return [
         'column' => null,
     ],
 
-    // Extra fixed values for every auto-created link (e.g. 'status' => 1).
+    // Links go live straight away (no approval queue).
+    'publish' => [
+        // Links-table column that marks a link as published/approved. Null =
+        // auto-detect (status, is_published, published, is_approved, approved, is_active, active).
+        'column' => null,
+        // Value meaning "published" in that column (e.g. 1, 'published', 'approved').
+        'value' => 1,
+    ],
+
+    // Extra fixed values for every auto-created link.
     'extra_columns' => [],
 
     // Where the site's countries come from. When the table does not exist,

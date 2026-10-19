@@ -299,6 +299,15 @@ class AutoCreateLinks extends Command
             $row[$authorCol] = $this->adminId;
         }
 
+        $publishCol = $cfg['publish']['column'] ?? $this->firstColumn($this->linkColumns,
+            ['status', 'is_published', 'published', 'is_approved', 'approved', 'is_active', 'active']);
+        if ($publishCol) {
+            $row[$publishCol] = $cfg['publish']['value'];
+        }
+        foreach (['published_at', 'approved_at'] as $dateCol) {
+            $row[$dateCol] = now();
+        }
+
         $row = array_merge($row, $cfg['extra_columns']);
 
         // Only keep columns the links table really has.

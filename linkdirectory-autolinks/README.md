@@ -12,6 +12,9 @@ OpenStreetMap businesses that have a **name, website, phone and e-mail**:
 - **Posted by admin.** Every link is saved under the admin account: the first
   admin in the `users` table, or the user set in `posted_by.user_id`. The run
   stops if no admin is found.
+- **Published immediately.** The link's status/approval column is set to
+  "published" (`publish` in the config), and `published_at`/`approved_at` are
+  filled in if those columns exist.
 - It skips links whose website domain is already in the directory.
 - Descriptions are generated from the OSM data and end with
   "© OpenStreetMap contributors". The ODbL licence requires that attribution.
