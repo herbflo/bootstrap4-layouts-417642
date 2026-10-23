@@ -201,10 +201,10 @@ class AutoCreateLinks extends Command
                     if ($res->successful()) {
                         return $res->json('elements') ?? [];
                     }
-                    $this->warn("Overpass {$endpoint} returned HTTP {$res->status()} (try {$try}): "
+                    $this->overpassWarning("Overpass {$endpoint} returned HTTP {$res->status()} for {$countryTitle}: "
                         . Str::limit(trim(strip_tags($res->body())), 150));
                 } catch (\Throwable $e) {
-                    $this->warn("Overpass {$endpoint} failed (try {$try}): {$e->getMessage()}");
+                    $this->overpassWarning("Overpass {$endpoint} failed for {$countryTitle}: " . Str::limit($e->getMessage(), 150));
                 }
                 // Busy server: wait longer before each retry (15s, 30s, ...).
                 sleep(15 * $try);
@@ -213,6 +213,13 @@ class AutoCreateLinks extends Command
 
         Log::warning("[links:auto-create] Overpass gave no data for {$countryTitle}");
         return [];
+    }
+
+    /** Show a warning on screen and also keep it in laravel.log for cron runs. */
+    private function overpassWarning(string $message): void
+    {
+        $this->warn($message);
+        Log::warning("[links:auto-create] {$message}");
     }
 
     /** Map OSM tags to the link fields, or null when a required field is missing. */

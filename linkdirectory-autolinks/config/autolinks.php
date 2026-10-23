@@ -31,7 +31,7 @@ return [
 
     // Stop once a run has taken this many seconds (each country takes about
     // a minute), so a slow OpenStreetMap server can't keep the job running.
-    'max_runtime' => 1200,
+    'max_runtime' => 1800,
 
     // Location titles that differ from the English country name in
     // OpenStreetMap, mapped to the ISO 3166-1 code (e.g. 'USA' => 'US').
@@ -55,8 +55,8 @@ return [
         ],
         // Busy public servers often answer 429/502/504; retry each one this many times.
         'tries_per_endpoint' => 1,
-        // Seconds per request. A healthy server answers in well under a minute.
-        'timeout' => 60,
+        // Seconds per request. Large countries (e.g. Germany) need a few minutes.
+        'timeout' => 180,
         // Max OSM results fetched per query, before phone/e-mail filtering and de-duplication.
         'fetch_limit' => 1000,
         'user_agent' => 'LinkDirectoryPro/1.0 (+https://linkdirectory.pro; support@linkdirectory.pro)',
